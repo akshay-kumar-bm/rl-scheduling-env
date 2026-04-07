@@ -1,6 +1,6 @@
 ---
 title: Scheduling Env Environment Server
-emoji: 🏏
+emoji: 📅
 colorFrom: blue
 colorTo: pink
 sdk: docker
@@ -11,245 +11,318 @@ tags:
   - openenv
 ---
 
-# Scheduling Env Environment
+# Meeting Scheduling RL Environment
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+An OpenEnv reinforcement-learning environment where AI agents learn to schedule meetings optimally across multiple attendees. The agent must propose time slots, resolve calendar conflicts by rescheduling lower-priority meetings, and satisfy each participant's scheduling preferences — all within a limited number of steps.
+
+## Overview
+
+The environment simulates a realistic corporate scheduling assistant. Given a meeting request, the agent iteratively:
+
+1. **Proposes** a time slot for all required attendees.
+2. **Reschedules** any lower-priority conflicting meetings to free up the slot.
+3. **Finalizes** the booking once the slot is conflict-free.
+
+Each episode is scored on scheduling quality (0.0–1.0), penalizing preference violations, unnecessary rescheduling, and excessive steps.
 
 ## Quick Start
 
-The simplest way to use the Scheduling Env environment is through the `SchedulingEnv` class:
+### Running the Heuristic Baseline (no LLM needed)
+
+```bash
+python inference.py
+```
+
+This runs a greedy baseline policy across all three tasks and prints step-by-step output in the required `[START]`/`[STEP]`/`[END]` format.
+
+### Using the Environment Directly (Python)
 
 ```python
-from scheduling_env import SchedulingAction, SchedulingEnv
+from server.scheduling_env_environment import SchedulingEnvironment
+from models import SchedulingAction
 
-try:
-    # Create environment from Docker image
-    scheduling_envenv = SchedulingEnv.from_docker_image("scheduling_env-env:latest")
+env = SchedulingEnvironment()
 
-    # Reset
-    result = scheduling_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+# Reset to a specific task
+obs = env.reset(task_id="task1_easy")
+print(f"Attendees: {obs.attendee_ids}")
+print(f"Duration:  {obs.requested_duration} min")
+print(f"Priority:  {obs.requested_priority}")
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+# Propose a time slot
+result = env.step(SchedulingAction(
+    action_type="propose_slot",
+    proposed_start="2025-04-07T10:00:00+00:00",
+    proposed_duration=30,
+))
+print(f"Conflicts: {result.conflicts}")
+print(f"Reward:    {result.reward}")
 
-    for msg in messages:
-        result = scheduling_envenv.step(SchedulingAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
-
-finally:
-    # Always clean up
-    scheduling_envenv.close()
+# Finalize when conflict-free
+result = env.step(SchedulingAction(action_type="finalize"))
+print(f"Success: {result.success}  Final score: {result.reward:.2f}")
 ```
 
-That's it! The `SchedulingEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+### Using the HTTP Client
 
-## Building the Docker Image
+```python
+from client import SchedulingEnv
+from models import SchedulingAction
 
-Before using the environment, you need to build the Docker image:
+with SchedulingEnv(base_url="http://localhost:8000") as env:
+    result = env.reset(task_id="task2_medium")
+    obs = result.observation
 
-```bash
-# From project root
-docker build -t scheduling_env-env:latest -f server/Dockerfile .
+    # Propose a slot
+    result = env.step(SchedulingAction(
+        action_type="propose_slot",
+        proposed_start="2025-04-07T11:00:00+00:00",
+        proposed_duration=60,
+    ))
+
+    # Reschedule a conflicting lower-priority meeting
+    if result.observation.conflicts:
+        conflict = result.observation.conflicts[0]
+        result = env.step(SchedulingAction(
+            action_type="reschedule_meeting",
+            meeting_id_to_move=conflict["meeting_id"],
+            new_start_time="2025-04-07T07:00:00+00:00",
+        ))
+
+    # Finalize
+    result = env.step(SchedulingAction(action_type="finalize"))
+    print(f"Score: {result.reward:.2f}")
 ```
-
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
-
-```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
-```
-
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
-
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
 
 ## Environment Details
 
-### Action
-**SchedulingAction**: Contains a single field
-- `message` (str) - The message to echo back
+### Actions (`SchedulingAction`)
 
-### Observation
-**SchedulingObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
+| `action_type`        | Required fields                              | Description                                               |
+|----------------------|----------------------------------------------|-----------------------------------------------------------|
+| `propose_slot`       | `proposed_start`, `proposed_duration`        | Propose a meeting start time (ISO 8601) and duration (min)|
+| `reschedule_meeting` | `meeting_id_to_move`, `new_start_time`       | Move a lower-priority conflict to a new time              |
+| `finalize`           | _(none)_                                     | Confirm the proposed slot; ends the episode               |
+| `reject`             | _(none)_                                     | Give up on scheduling; ends the episode with 0 reward     |
 
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
+**Meeting ID format:** `{attendee}_{start_iso}` — e.g. `user1_2025-04-07T09:00:00+00:00`
 
-## Advanced Usage
+### Observations (`SchedulingObservation`)
 
-### Connecting to an Existing Server
+| Field                   | Type                    | Description                                                  |
+|-------------------------|-------------------------|--------------------------------------------------------------|
+| `requested_duration`    | `int`                   | Meeting duration in minutes                                  |
+| `requested_priority`    | `int`                   | Priority of the new meeting (1 = highest, 5 = lowest)        |
+| `attendee_ids`          | `List[str]`             | Required attendees                                           |
+| `busy_slots`            | `List[dict]`            | All existing calendar entries for attendees                  |
+| `collective_work_hours` | `dict`                  | Shared working-hours window `{min_start_hour, max_end_hour}` |
+| `preference_constraints`| `dict`                  | Aggregated constraints (max meetings/day, buffer, etc.)      |
+| `current_proposal`      | `dict \| None`          | Currently proposed slot `{start, end}`                       |
+| `conflicts`             | `List[dict]`            | Conflicts for the current proposal                           |
+| `preference_penalty`    | `float`                 | Accumulated preference-violation penalty                     |
+| `num_rescheduled`       | `int`                   | Meetings rescheduled so far in this episode                  |
+| `steps_taken`           | `int`                   | Steps used so far                                            |
+| `max_steps`             | `int`                   | Episode step limit (20)                                      |
+| `success`               | `bool`                  | `True` when the meeting is successfully booked               |
+| `error_message`         | `str \| None`           | Reason if the last action was invalid                        |
+| `done`                  | `bool`                  | `True` when the episode has ended                            |
+| `reward`                | `float`                 | Step or final reward                                         |
 
-If you already have a Scheduling Env environment server running, you can connect directly:
+### Reward Design
 
-```python
-from scheduling_env import SchedulingEnv
+**Step-level rewards** (returned after each `propose_slot` or `reschedule_meeting`):
 
-# Connect to existing server
-scheduling_envenv = SchedulingEnv(base_url="<ENV_HTTP_URL_HERE>")
+| Outcome                                  | Reward |
+|------------------------------------------|--------|
+| Conflict-free proposal (low penalty)     | +0.5   |
+| Proposal has reschedulable conflicts     | +0.2   |
+| Proposal has non-reschedulable conflicts | −0.3   |
+| Invalid action                           | −0.1   |
+| Outside working hours                    | −0.2   |
 
-# Use as normal
-result = scheduling_envenv.reset()
-result = scheduling_envenv.step(SchedulingAction(message="Hello!"))
+**Final reward** (returned on `finalize`) — deducted from 1.0:
+
+```
+preference_deduction  = min(0.75, (penalty ** 1.2) / 200.0)
+reschedule_deduction  = min(0.30, 0.05 * (1.8 ** num_rescheduled))   [if any rescheduled]
+time_deduction        = steps_taken * 0.015
+
+final_reward = clamp(1.0 - preference_deduction - reschedule_deduction - time_deduction, 0.0, 1.0)
 ```
 
-Note: When connecting to an existing server, `scheduling_envenv.close()` will NOT stop the server.
+Timeout (step 20 reached without `finalize`) gives partial credit: 70 % of the theoretical reward if conflict-free, or a progress-based fraction otherwise.
 
-### Using the Context Manager
+## Tasks
 
-The client supports context manager usage for automatic connection management:
+Three tasks of increasing difficulty are provided as JSON scenarios in `server/scenarios/`:
 
-```python
-from scheduling_env import SchedulingAction, SchedulingEnv
+| Task ID         | Difficulty | Attendees | Duration | Priority | Rescheduling needed | Expected score |
+|-----------------|------------|-----------|----------|----------|---------------------|----------------|
+| `task1_easy`    | Easy       | 2         | 30 min   | 3        | No                  | 0.8 – 1.0      |
+| `task2_medium`  | Medium     | 4         | 60 min   | 2        | Yes (1 meeting)     | 0.5 – 0.7      |
+| `task3_hard`    | Hard       | 6         | 45 min   | 2        | Yes (3+ meetings)   | 0.25 – 0.45    |
 
-# Connect with context manager (auto-connects and closes)
-with SchedulingEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(SchedulingAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
+### task1_easy — Team Sync (2 attendees)
 
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
+- Two attendees each have 2 existing meetings; a clear free slot exists at **10:00**.
+- Agent should find the free slot and finalize in 2 steps.
+- No rescheduling required.
 
-### Concurrent WebSocket Sessions
+### task2_medium — Cross-Team Planning (4 attendees)
 
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
+- Four attendees with densely packed schedules; the optimal slot at **11:00** has one low-priority conflict (`user3` Coffee chat, priority 4).
+- Agent needs to propose the slot, reschedule the conflict, then finalize.
+- User preferences include back-to-back avoidance and different preferred-hour windows.
 
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    SchedulingEnvironment,  # Pass class, not instance
-    SchedulingAction,
-    SchedulingObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
+### task3_hard — Executive Planning Session (6 attendees)
 
-Then multiple clients can connect simultaneously:
+- Six attendees with very dense calendars; the best window at **15:00** requires rescheduling three low-priority meetings (priority 4).
+- Multiple valid solutions exist; the agent must navigate cascading constraints.
+- All attendees have strict buffer requirements and narrow preferred-hour windows.
 
-```python
-from scheduling_env import SchedulingAction, SchedulingEnv
-from concurrent.futures import ThreadPoolExecutor
+## Participant Preferences
 
-def run_episode(client_id: int):
-    with SchedulingEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(SchedulingAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
+Each attendee can have the following preferences (stored in scenario JSON and observed via `preference_constraints`):
 
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
+| Preference             | Description                                         | Penalty for violation |
+|------------------------|-----------------------------------------------------|-----------------------|
+| `preferred_hours`      | `{start: H, end: H}` — preferred working hours      | +50 per participant   |
+| `max_meetings_per_day` | Maximum meetings the participant wants in a day      | +30 per participant   |
+| `avoid_back_to_back`   | Whether a buffer gap is required between meetings    | +20 per participant   |
+| `buffer_minutes`       | Gap required before/after a meeting (if avoid_btb)  | (part of above)       |
+
+The **collective working hours** (the intersection of all attendees' preferred hours) define the hard constraint window within which proposals must fall.
+
+## API Endpoints
+
+The server exposes the following HTTP endpoints (also available via the Web UI at `/web`):
+
+| Method | Path      | Description                                                        |
+|--------|-----------|--------------------------------------------------------------------|
+| POST   | `/reset`  | Start a new episode. Body: `{"task_id": "task1_easy"}`             |
+| POST   | `/step`   | Take an action. Body: `{"action_type": "...", ...action fields}`   |
+| GET    | `/state`  | Return the full internal `SchedulingState`                         |
+| GET    | `/health` | Health check — returns `{"status": "healthy"}`                     |
+| GET    | `/docs`   | Interactive OpenAPI / Swagger UI                                   |
+
+### Example: REST interaction
+
+```bash
+# Start episode
+curl -X POST http://localhost:8000/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": "task1_easy"}'
+
+# Propose a slot
+curl -X POST http://localhost:8000/step \
+  -H "Content-Type: application/json" \
+  -d '{"action_type": "propose_slot", "proposed_start": "2025-04-07T10:00:00+00:00", "proposed_duration": 30}'
+
+# Finalize
+curl -X POST http://localhost:8000/step \
+  -H "Content-Type: application/json" \
+  -d '{"action_type": "finalize"}'
 ```
 
 ## Development & Testing
 
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
+### Run the baseline inference script
 
 ```bash
-# From the server directory
-python3 server/scheduling_env_environment.py
+python inference.py
 ```
 
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
+### Start the server locally
 
 ```bash
 uvicorn server.app:app --reload
 ```
 
+### Validate the environment (required before submission)
+
+```bash
+openenv validate
+```
+
+### Generate / update the lock file
+
+```bash
+uv lock
+```
+
+### Build the Docker image
+
+```bash
+docker build -t scheduling_env:latest .
+```
+
+## Deploying to Hugging Face Spaces
+
+```bash
+# From the project root (where openenv.yaml is located)
+openenv push
+
+# Push to a specific repository
+openenv push --repo-id my-org/my-scheduling-env
+
+# Push as a private space
+openenv push --private
+```
+
+The `openenv push` command validates the environment, builds a Hugging Face-compatible Docker image, and uploads it. After deployment your space is available at:
+
+```
+https://huggingface.co/spaces/<repo-id>
+```
+
+The deployed space includes:
+- **Web Interface** at `/web` — interactive UI for exploring the environment
+- **API Documentation** at `/docs` — full OpenAPI / Swagger interface
+- **Health Check** at `/health` — container health monitoring
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--directory`, `-d` | Directory with `openenv.yaml` (default: current dir) |
+| `--repo-id`, `-r` | Repository ID `username/repo-name` |
+| `--base-image`, `-b` | Override Dockerfile `FROM` image |
+| `--private` | Deploy as a private space (default: public) |
+
+## Environment Variables (for LLM-based inference)
+
+Create a `.env` file (never commit it):
+
+```
+API_BASE_URL=https://router.huggingface.co/v1   # HF Router endpoint
+MODEL_NAME=Qwen/Qwen2.5-72B-Instruct            # Model identifier
+HF_TOKEN=hf_...                                  # Hugging Face API key
+```
+
 ## Project Structure
 
 ```
-scheduling_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # SchedulingEnv client
-├── models.py              # Action and Observation models
+rl-scheduling-env/
+├── Dockerfile                          # Container image (root, required by openenv)
+├── README.md                           # This file
+├── openenv.yaml                        # OpenEnv manifest
+├── pyproject.toml                      # Project metadata and dependencies
+├── uv.lock                             # Locked dependencies (generated by `uv lock`)
+├── __init__.py                         # Package exports
+├── models.py                           # Pydantic models: SchedulingAction,
+│                                       #   SchedulingObservation, SchedulingState
+├── client.py                           # SchedulingEnv HTTP/WebSocket client
+├── inference.py                        # Heuristic baseline (no LLM required)
 └── server/
-    ├── __init__.py        # Server module exports
-    ├── scheduling_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+    ├── __init__.py                     # Server package exports
+    ├── app.py                          # FastAPI app + SchedulingHTTPEnvServer
+    ├── scheduling_env_environment.py   # Core RL environment (reset / step / state)
+    ├── scheduling_logic.py             # Pure utility functions (conflict detection,
+    │                                   #   preference scoring, reward calculation)
+    ├── graders.py                      # SchedulingGrader (0.0–1.0 episode scorer)
+    ├── requirements.txt                # Server-side Python dependencies
+    └── scenarios/
+        ├── task1_easy.json             # Easy: 2 attendees, free slot exists
+        ├── task2_medium.json           # Medium: 4 attendees, 1 rescheduling needed
+        └── task3_hard.json             # Hard: 6 attendees, 3+ reschedulings needed
 ```
