@@ -1,0 +1,70 @@
+{
+  "task_id": "task2_medium",
+  "description": "Schedule a 60-minute planning session with 4 attendees",
+  "difficulty": "medium",
+  "meeting_request": {
+    "duration": 60,
+    "priority": 2,
+    "attendees": ["user1", "user2", "user3", "user4"],
+    "summary": "Cross-Team Planning"
+  },
+  "calendars": {
+    "user1": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T10:00:00+00:00", 2, "Standup"],
+      ["2025-04-07T10:30:00+00:00", "2025-04-07T11:30:00+00:00", 3, "Review"],
+      ["2025-04-07T13:00:00+00:00", "2025-04-07T14:00:00+00:00", 3, "Lunch meeting"],
+      ["2025-04-07T15:00:00+00:00", "2025-04-07T16:00:00+00:00", 4, "Optional workshop"],
+      ["2025-04-07T16:30:00+00:00", "2025-04-07T17:00:00+00:00", 3, "Sync"]
+    ],
+    "user2": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T10:00:00+00:00", 2, "Standup"],
+      ["2025-04-07T11:00:00+00:00", "2025-04-07T12:00:00+00:00", 2, "Client demo"],
+      ["2025-04-07T14:00:00+00:00", "2025-04-07T15:00:00+00:00", 3, "Code review"],
+      ["2025-04-07T16:00:00+00:00", "2025-04-07T17:00:00+00:00", 3, "Office hours"]
+    ],
+    "user3": [
+      ["2025-04-07T09:30:00+00:00", "2025-04-07T10:30:00+00:00", 3, "Design review"],
+      ["2025-04-07T12:00:00+00:00", "2025-04-07T13:00:00+00:00", 3, "Team lunch"],
+      ["2025-04-07T14:00:00+00:00", "2025-04-07T15:30:00+00:00", 2, "Sprint planning"],
+      ["2025-04-07T16:00:00+00:00", "2025-04-07T16:30:00+00:00", 4, "Coffee chat"]
+    ],
+    "user4": [
+      ["2025-04-07T10:00:00+00:00", "2025-04-07T11:00:00+00:00", 2, "Strategy meeting"],
+      ["2025-04-07T13:00:00+00:00", "2025-04-07T14:00:00+00:00", 3, "1-on-1"],
+      ["2025-04-07T15:00:00+00:00", "2025-04-07T16:00:00+00:00", 3, "Team sync"]
+    ]
+  },
+  "preferences": {
+    "user1": {
+      "preferred_hours": {"start": 10, "end": 16},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 15
+    },
+    "user2": {
+      "preferred_hours": {"start": 9, "end": 17},
+      "max_meetings_per_day": 4,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 10
+    },
+    "user3": {
+      "preferred_hours": {"start": 9, "end": 15},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": false,
+      "buffer_minutes": 0
+    },
+    "user4": {
+      "preferred_hours": {"start": 10, "end": 17},
+      "max_meetings_per_day": 6,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 15
+    }
+  },
+  "expected_solution": {
+    "optimal_slot": "2025-04-07T11:00:00+00:00",
+    "expected_score_range": [0.5, 0.7],
+    "min_steps": 3,
+    "requires_rescheduling": true,
+    "reschedulable_meetings": ["user3:Coffee chat (priority 4)"]
+  }
+}

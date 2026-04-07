@@ -1,0 +1,41 @@
+{
+  "task_id": "task1_easy",
+  "description": "Schedule a 30-minute team sync with 2 attendees",
+  "difficulty": "easy",
+  "meeting_request": {
+    "duration": 30,
+    "priority": 3,
+    "attendees": ["user1", "user2"],
+    "summary": "Team Sync"
+  },
+  "calendars": {
+    "user1": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T10:00:00+00:00", 2, "Morning standup"],
+      ["2025-04-07T14:00:00+00:00", "2025-04-07T15:00:00+00:00", 3, "Client call"]
+    ],
+    "user2": [
+      ["2025-04-07T11:00:00+00:00", "2025-04-07T12:00:00+00:00", 2, "Team meeting"],
+      ["2025-04-07T15:00:00+00:00", "2025-04-07T16:00:00+00:00", 3, "1-on-1"]
+    ]
+  },
+  "preferences": {
+    "user1": {
+      "preferred_hours": {"start": 9, "end": 17},
+      "max_meetings_per_day": 6,
+      "avoid_back_to_back": false,
+      "buffer_minutes": 0
+    },
+    "user2": {
+      "preferred_hours": {"start": 9, "end": 17},
+      "max_meetings_per_day": 6,
+      "avoid_back_to_back": false,
+      "buffer_minutes": 0
+    }
+  },
+  "expected_solution": {
+    "optimal_slot": "2025-04-07T10:00:00+00:00",
+    "expected_score_range": [0.8, 1.0],
+    "min_steps": 2,
+    "requires_rescheduling": false
+  }
+}

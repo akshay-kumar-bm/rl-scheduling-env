@@ -1,0 +1,108 @@
+{
+  "task_id": "task3_hard",
+  "description": "Schedule a 45-minute executive meeting with 6 attendees",
+  "difficulty": "hard",
+  "meeting_request": {
+    "duration": 45,
+    "priority": 2,
+    "attendees": ["user1", "user2", "user3", "user4", "user5", "user6"],
+    "summary": "Executive Planning Session"
+  },
+  "calendars": {
+    "user1": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T10:00:00+00:00", 2, "Strategy meeting"],
+      ["2025-04-07T10:30:00+00:00", "2025-04-07T11:30:00+00:00", 3, "Team standup"],
+      ["2025-04-07T12:00:00+00:00", "2025-04-07T13:00:00+00:00", 3, "Lunch meeting"],
+      ["2025-04-07T13:30:00+00:00", "2025-04-07T14:30:00+00:00", 2, "Client call"],
+      ["2025-04-07T15:00:00+00:00", "2025-04-07T15:45:00+00:00", 4, "Optional training"],
+      ["2025-04-07T16:00:00+00:00", "2025-04-07T17:00:00+00:00", 3, "Project sync"]
+    ],
+    "user2": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T09:30:00+00:00", 2, "Morning sync"],
+      ["2025-04-07T10:00:00+00:00", "2025-04-07T11:00:00+00:00", 2, "Design review"],
+      ["2025-04-07T11:30:00+00:00", "2025-04-07T12:30:00+00:00", 3, "Code review"],
+      ["2025-04-07T13:00:00+00:00", "2025-04-07T14:00:00+00:00", 3, "1-on-1"],
+      ["2025-04-07T14:30:00+00:00", "2025-04-07T15:30:00+00:00", 2, "Planning meeting"],
+      ["2025-04-07T16:00:00+00:00", "2025-04-07T16:45:00+00:00", 4, "Coffee chat"]
+    ],
+    "user3": [
+      ["2025-04-07T09:30:00+00:00", "2025-04-07T10:30:00+00:00", 3, "Sprint planning"],
+      ["2025-04-07T11:00:00+00:00", "2025-04-07T12:00:00+00:00", 2, "Architecture review"],
+      ["2025-04-07T12:30:00+00:00", "2025-04-07T13:30:00+00:00", 3, "Team lunch"],
+      ["2025-04-07T14:00:00+00:00", "2025-04-07T15:00:00+00:00", 2, "Client demo"],
+      ["2025-04-07T15:30:00+00:00", "2025-04-07T16:15:00+00:00", 4, "Office hours"]
+    ],
+    "user4": [
+      ["2025-04-07T10:00:00+00:00", "2025-04-07T11:00:00+00:00", 2, "Board meeting"],
+      ["2025-04-07T11:30:00+00:00", "2025-04-07T12:30:00+00:00", 3, "Product review"],
+      ["2025-04-07T13:00:00+00:00", "2025-04-07T14:00:00+00:00", 2, "Executive sync"],
+      ["2025-04-07T14:30:00+00:00", "2025-04-07T15:30:00+00:00", 3, "Team meeting"],
+      ["2025-04-07T16:00:00+00:00", "2025-04-07T17:00:00+00:00", 4, "Mentor session"]
+    ],
+    "user5": [
+      ["2025-04-07T09:00:00+00:00", "2025-04-07T10:00:00+00:00", 3, "Daily standup"],
+      ["2025-04-07T10:30:00+00:00", "2025-04-07T11:30:00+00:00", 2, "Strategic planning"],
+      ["2025-04-07T12:00:00+00:00", "2025-04-07T13:00:00+00:00", 3, "Working lunch"],
+      ["2025-04-07T13:30:00+00:00", "2025-04-07T14:30:00+00:00", 3, "Performance review"],
+      ["2025-04-07T15:00:00+00:00", "2025-04-07T16:00:00+00:00", 2, "Budget meeting"],
+      ["2025-04-07T16:30:00+00:00", "2025-04-07T17:00:00+00:00", 4, "Optional networking"]
+    ],
+    "user6": [
+      ["2025-04-07T09:30:00+00:00", "2025-04-07T10:30:00+00:00", 2, "Leadership meeting"],
+      ["2025-04-07T11:00:00+00:00", "2025-04-07T12:00:00+00:00", 3, "Project checkpoint"],
+      ["2025-04-07T12:30:00+00:00", "2025-04-07T13:30:00+00:00", 3, "Team sync"],
+      ["2025-04-07T14:00:00+00:00", "2025-04-07T15:00:00+00:00", 2, "Client meeting"],
+      ["2025-04-07T15:30:00+00:00", "2025-04-07T16:30:00+00:00", 4, "Training session"]
+    ]
+  },
+  "preferences": {
+    "user1": {
+      "preferred_hours": {"start": 10, "end": 16},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 15
+    },
+    "user2": {
+      "preferred_hours": {"start": 9, "end": 17},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 15
+    },
+    "user3": {
+      "preferred_hours": {"start": 9, "end": 15},
+      "max_meetings_per_day": 4,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 20
+    },
+    "user4": {
+      "preferred_hours": {"start": 10, "end": 17},
+      "max_meetings_per_day": 6,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 10
+    },
+    "user5": {
+      "preferred_hours": {"start": 9, "end": 16},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 15
+    },
+    "user6": {
+      "preferred_hours": {"start": 9, "end": 16},
+      "max_meetings_per_day": 5,
+      "avoid_back_to_back": true,
+      "buffer_minutes": 10
+    }
+  },
+  "expected_solution": {
+    "optimal_slot": "2025-04-07T15:00:00+00:00",
+    "expected_score_range": [0.25, 0.45],
+    "min_steps": 5,
+    "requires_rescheduling": true,
+    "reschedulable_meetings": [
+      "user1:Optional training (priority 4)",
+      "user2:Coffee chat (priority 4)",
+      "user5:Optional networking (priority 4)"
+    ],
+    "notes": "Multiple valid solutions exist. Agent must reschedule 3+ low-priority meetings."
+  }
+}
