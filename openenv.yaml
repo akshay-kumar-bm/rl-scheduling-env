@@ -5,3 +5,13 @@ runtime: fastapi
 app: server.app:app
 port: 8000
 description: "Intelligent Meeting Scheduling - Learn optimal scheduling through multi-stakeholder preference optimization"
+tasks:
+  - id: task1_easy
+    difficulty: easy
+    grader: graders.task1_easy_grader
+  - id: task2_medium
+    difficulty: medium
+    grader: graders.task2_medium_grader
+  - id: task3_hard
+    difficulty: hard
+    grader: graders.task3_hard_grader
