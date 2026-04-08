@@ -1,198 +1,293 @@
-#!/usr/bin/env python3
 """
-Baseline inference script for the Meeting Scheduling RL Environment.
+LLM-based Inference Script for Meeting Scheduling RL Environment.
+===================================
+Uses OpenAI-compatible LLM via HF Router to intelligently schedule meetings.
 
-Uses a HEURISTIC policy (BotBooked greedy algorithm) - NO LLM required.
-Deterministic, reproducible, fast (~seconds for all 3 tasks).
+MANDATORY environment variables:
+    API_BASE_URL   The API endpoint for the LLM.
+    MODEL_NAME     The model identifier to use for inference.
+    HF_TOKEN       Your Hugging Face / API key.
 
-Output format: [START]/[STEP]/[END] per hackathon spec.
+STDOUT FORMAT:
+    [START] task=<task_name> env=scheduling_env model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
-from __future__ import annotations
+import asyncio
+import json
+import os
+import textwrap
+from typing import Dict, List, Optional
 
-import sys
-from datetime import datetime, timedelta, timezone
+from openai import OpenAI
 
-from server.scheduling_env_environment import SchedulingEnvironment
-from models import SchedulingAction
-from server.scheduling_logic import find_earliest_free_slot, parse_iso
+from scheduling_env.client import SchedulingEnv
+from scheduling_env.models import SchedulingAction
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+
+ENV_REPO_ID = "Akshaykumarbm/scheduling_env"
+BENCHMARK = "scheduling_env"
+TASKS = ["task1_easy", "task2_medium", "task3_hard"]
+MAX_STEPS = 20
+TEMPERATURE = 0.3
+MAX_TOKENS = 512
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def baseline_policy(obs) -> SchedulingAction:
-    """Heuristic baseline using greedy slot search + lowest-priority rescheduling."""
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
-    # Step 1: No proposal yet -> find a free slot
-    if obs.current_proposal is None:
-        # Build calendars dict from busy_slots
-        calendars = {}
-        for slot in obs.busy_slots:
-            att = slot["attendee"]
-            if att not in calendars:
-                calendars[att] = []
-            calendars[att].append([slot["start"], slot["end"], slot["priority"], slot["summary"]])
 
-        # Try to find a completely free slot
-        free = find_earliest_free_slot(
-            calendars,
-            obs.attendee_ids,
-            obs.requested_duration,
-            obs.busy_slots[0]["start"] if obs.busy_slots else "2025-04-07T09:00:00+00:00",
-            obs.collective_work_hours,
-        )
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
 
-        if free:
+
+# ---------------------------------------------------------------------------
+# LLM interaction
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = textwrap.dedent("""\
+You are an AI meeting scheduling assistant. You must schedule a meeting by choosing actions.
+
+Available actions (respond with EXACTLY one JSON object):
+
+1. Propose a time slot:
+   {"action_type": "propose_slot", "proposed_start": "<ISO8601>", "proposed_duration": <minutes>}
+
+2. Reschedule a conflicting meeting (only if priority > requested priority):
+   {"action_type": "reschedule_meeting", "meeting_id_to_move": "<attendee>_<start_iso>", "new_start_time": "<ISO8601>"}
+
+3. Finalize the schedule (only when no conflicts remain):
+   {"action_type": "finalize"}
+
+4. Reject (give up):
+   {"action_type": "reject"}
+
+Rules:
+- Propose slots within collective working hours.
+- You can only reschedule meetings with LOWER priority (higher number) than the requested meeting.
+- meeting_id format is: <attendee>_<start_iso> (e.g., "user1_2025-04-07T09:00:00+00:00").
+- After rescheduling all conflicts, call finalize.
+- Minimize preference violations and rescheduling.
+- Respond with ONLY the JSON object, no other text.
+""")
+
+
+def format_observation(obs, step: int) -> str:
+    """Convert a SchedulingObservation into a user prompt for the LLM."""
+    parts = [
+        f"Step {step}/{obs.max_steps}",
+        f"Meeting to schedule: {obs.requested_duration} min, priority {obs.requested_priority}",
+        f"Attendees: {', '.join(obs.attendee_ids)}",
+        f"Collective working hours: {obs.collective_work_hours.get('min_start_hour', 9)}:00 - {obs.collective_work_hours.get('max_end_hour', 17)}:00",
+    ]
+
+    if obs.preference_constraints:
+        parts.append(f"Preferences: max {obs.preference_constraints.get('max_meetings_per_day', 'N/A')} meetings/day, "
+                      f"buffer required: {obs.preference_constraints.get('requires_buffer', False)}, "
+                      f"buffer mins: {obs.preference_constraints.get('buffer_minutes', 0)}")
+
+    # Busy slots grouped by attendee
+    busy_by_attendee: Dict[str, List] = {}
+    for slot in obs.busy_slots:
+        att = slot["attendee"]
+        busy_by_attendee.setdefault(att, []).append(slot)
+
+    parts.append("\nCalendars:")
+    for att in obs.attendee_ids:
+        slots = busy_by_attendee.get(att, [])
+        if slots:
+            slot_strs = [
+                f"  - {s['start']} to {s['end']} (priority {s['priority']}, {s['summary']})"
+                for s in sorted(slots, key=lambda x: x["start"])
+            ]
+            parts.append(f"  {att}:")
+            parts.extend(slot_strs)
+        else:
+            parts.append(f"  {att}: (no meetings)")
+
+    if obs.current_proposal:
+        parts.append(f"\nCurrent proposal: {obs.current_proposal['start']} to {obs.current_proposal['end']}")
+
+    if obs.conflicts:
+        parts.append(f"\nConflicts ({len(obs.conflicts)}):")
+        for c in obs.conflicts:
+            parts.append(
+                f"  - {c['attendee']}: {c['start']} to {c['end']} "
+                f"(priority {c['priority']}, {c['summary']}, id: {c['meeting_id']})"
+            )
+
+    if obs.error_message:
+        parts.append(f"\nLast error: {obs.error_message}")
+
+    parts.append(f"\nRescheduled so far: {obs.num_rescheduled}")
+    parts.append(f"Preference penalty: {obs.preference_penalty}")
+
+    if not obs.current_proposal and not obs.conflicts:
+        parts.append("\nAction needed: propose a time slot for the meeting.")
+    elif obs.conflicts:
+        parts.append("\nAction needed: reschedule a conflict (lower-priority only) or propose a different slot.")
+    else:
+        parts.append("\nAction needed: no conflicts remain - you should finalize.")
+
+    return "\n".join(parts)
+
+
+def parse_llm_response(text: str, obs) -> SchedulingAction:
+    """Parse LLM JSON response into a SchedulingAction, with fallback."""
+    # Extract JSON from response (handle markdown code blocks)
+    cleaned = text.strip()
+    if "```" in cleaned:
+        # Extract content between code fences
+        lines = cleaned.split("\n")
+        json_lines = []
+        in_block = False
+        for line in lines:
+            if line.strip().startswith("```"):
+                in_block = not in_block
+                continue
+            if in_block:
+                json_lines.append(line)
+        cleaned = "\n".join(json_lines).strip()
+
+    # Try to find JSON object in the response
+    start = cleaned.find("{")
+    end = cleaned.rfind("}") + 1
+    if start >= 0 and end > start:
+        cleaned = cleaned[start:end]
+
+    try:
+        data = json.loads(cleaned)
+        return SchedulingAction(**data)
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"[DEBUG] Failed to parse LLM response: {e}. Response: {text[:200]}", flush=True)
+        # Fallback: if we have no proposal yet, propose at first available hour
+        if obs.current_proposal is None:
+            min_h = obs.collective_work_hours.get("min_start_hour", 9)
             return SchedulingAction(
                 action_type="propose_slot",
-                proposed_start=free,
+                proposed_start=f"2025-04-07T{min_h:02d}:00:00+00:00",
                 proposed_duration=obs.requested_duration,
             )
-
-        # No completely free slot found.
-        # Scan 15-min increments within collective hours for a slot with only
-        # reschedulable conflicts (priority > requested_priority).
-        min_h = obs.collective_work_hours.get("min_start_hour", 9)
-        max_h = obs.collective_work_hours.get("max_end_hour", 17)
-        duration = obs.requested_duration
-        tz = timezone.utc
-
-        candidate = datetime(2025, 4, 7, min_h, 0, 0, tzinfo=tz)
-        end_boundary = datetime(2025, 4, 7, max_h, 0, 0, tzinfo=tz)
-        step_delta = timedelta(minutes=15)
-
-        best_candidate = None
-        best_conflict_count = 999
-
-        while candidate + timedelta(minutes=duration) <= end_boundary:
-            c_start = candidate.isoformat()
-            c_end = (candidate + timedelta(minutes=duration)).isoformat()
-
-            # Count conflicts at this candidate
-            conflicts_here = []
-            for att in obs.attendee_ids:
-                for entry in calendars.get(att, []):
-                    e_start = parse_iso(entry[0])
-                    e_end = parse_iso(entry[1])
-                    if candidate < e_end and e_start < candidate + timedelta(minutes=duration):
-                        conflicts_here.append(entry)
-
-            # Check if all conflicts are reschedulable
-            all_reschedulable = all(
-                c[2] > obs.requested_priority for c in conflicts_here
-            )
-
-            if all_reschedulable and len(conflicts_here) < best_conflict_count:
-                best_candidate = c_start
-                best_conflict_count = len(conflicts_here)
-                if best_conflict_count == 0:
-                    break  # Perfect slot
-
-            candidate += step_delta
-
-        if best_candidate:
-            return SchedulingAction(
-                action_type="propose_slot",
-                proposed_start=best_candidate,
-                proposed_duration=duration,
-            )
-
-        # Last resort: propose at collective hours start (will likely conflict)
-        fallback = f"2025-04-07T{min_h:02d}:00:00+00:00"
-        return SchedulingAction(
-            action_type="propose_slot",
-            proposed_start=fallback,
-            proposed_duration=obs.requested_duration,
-        )
-
-    # Step 2: Has proposal with conflicts -> reschedule lowest-priority conflict
-    if obs.conflicts:
-        sorted_conflicts = sorted(obs.conflicts, key=lambda x: x["priority"], reverse=True)
-        target = sorted_conflicts[0]
-
-        # Can only reschedule lower priority
-        if target["priority"] <= obs.requested_priority:
+        elif not obs.conflicts:
+            return SchedulingAction(action_type="finalize")
+        else:
             return SchedulingAction(action_type="reject")
 
-        # Find a free slot for this attendee to move the meeting to.
-        # Search in early morning (06:00-08:00) and late evening (17:00-20:00).
-        attendee = target["attendee"]
-        meeting_dur = parse_iso(target["end"]) - parse_iso(target["start"])
-        dur_min = int(meeting_dur.total_seconds() // 60)
 
-        # Build this attendee's calendar
-        att_cal = [
-            s for s in obs.busy_slots if s["attendee"] == attendee
-        ]
-        att_entries = [[s["start"], s["end"], s["priority"], s["summary"]] for s in att_cal]
+def get_llm_action(client: OpenAI, obs, step: int) -> SchedulingAction:
+    """Query the LLM and return a SchedulingAction."""
+    user_prompt = format_observation(obs, step)
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+            stream=False,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        return parse_llm_response(text, obs)
+    except Exception as exc:
+        print(f"[DEBUG] LLM request failed: {exc}", flush=True)
+        return parse_llm_response("", obs)
 
-        new_time = None
-        # Try slots at 06:00, 06:30, 07:00, 07:30, 17:00, 17:30, 18:00, 18:30, 19:00
-        for h, m in [(6,0),(6,30),(7,0),(7,30),(17,0),(17,30),(18,0),(18,30),(19,0),(19,30),(20,0)]:
-            cand = datetime(2025, 4, 7, h, m, 0, tzinfo=timezone.utc)
-            cand_end = cand + timedelta(minutes=dur_min)
-            cand_iso = cand.isoformat()
-            cand_end_iso = cand_end.isoformat()
-            # Check free for this attendee
-            conflict_found = False
-            for e in att_entries:
-                es = parse_iso(e[0])
-                ee = parse_iso(e[1])
-                if cand < ee and es < cand_end:
-                    conflict_found = True
-                    break
-            if not conflict_found:
-                new_time = cand_iso
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+async def run_task(env, client: OpenAI, task_id: str) -> None:
+    """Run a single scheduling task."""
+    rewards: List[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
+
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+
+    try:
+        result = await env.reset(task_id=task_id)
+        obs = result.observation
+
+        for step in range(1, MAX_STEPS + 1):
+            if result.done:
                 break
 
-        if not new_time:
-            # Give up on this conflict, try rejecting
-            return SchedulingAction(action_type="reject")
+            action = get_llm_action(client, obs, step)
 
+            result = await env.step(action)
+            obs = result.observation
 
-        return SchedulingAction(
-            action_type="reschedule_meeting",
-            meeting_id_to_move=target["meeting_id"],
-            new_start_time=new_time,
-        )
+            reward = result.reward or 0.0
+            done = result.done
+            error = obs.error_message
 
-    # Step 3: No conflicts -> finalize
-    return SchedulingAction(action_type="finalize")
-
-
-def main():
-    env = SchedulingEnvironment()
-
-    for task_id in ["task1_easy", "task2_medium", "task3_hard"]:
-        print(f"[START] task={task_id} env=scheduling_env model=heuristic_baseline")
-
-        obs = env.reset(task_id=task_id)
-        done = False
-        step = 0
-        rewards = []
-
-        while not done and step < 20:
-            action = baseline_policy(obs)
-            obs = env.step(action)
-            done = obs.done
-            reward = obs.reward if obs.reward is not None else 0.0
             rewards.append(reward)
-            step += 1
+            steps_taken = step
 
-            error = obs.error_message if obs.error_message else "null"
-            print(
-                f"[STEP]  step={step} action={action.action_type} "
-                f"reward={reward:.2f} done={str(done).lower()} error={error}"
-            )
+            action_str = action.action_type
+            if action.action_type == "propose_slot":
+                action_str = f"propose_slot({action.proposed_start},{action.proposed_duration}m)"
+            elif action.action_type == "reschedule_meeting":
+                action_str = f"reschedule({action.meeting_id_to_move}->{action.new_start_time})"
 
-        final_score = rewards[-1] if (done and rewards) else 0.0
-        success = obs.success if hasattr(obs, "success") else False
-        rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+            log_step(step=step, action=action_str, reward=reward, done=done, error=error)
 
-        print(
-            f"[END]   success={str(success).lower()} steps={step} "
-            f"score={final_score:.2f} rewards={rewards_str}"
-        )
-        print()
+            if done:
+                break
+
+        # Score is the final reward (0.0-1.0 from calculate_final_reward)
+        score = rewards[-1] if rewards else 0.0
+        score = min(max(score, 0.0), 1.0)
+        success = obs.success if hasattr(obs, "success") else (score > 0.0)
+
+    except Exception as exc:
+        print(f"[DEBUG] Task {task_id} error: {exc}", flush=True)
+
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+
+async def main() -> None:
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    env = await SchedulingEnv.from_env(ENV_REPO_ID)
+
+    try:
+        for task_id in TASKS:
+            await run_task(env, llm_client, task_id)
+    finally:
+        try:
+            await env.close()
+        except Exception as e:
+            print(f"[DEBUG] env.close() error: {e}", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
