@@ -38,6 +38,7 @@ from .scheduling_logic import (
     parse_iso,
     within_collective_hours,
 )
+from .scenario_generator import generate_scenario
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +70,36 @@ class SchedulingEnvironment(Environment):
     def reset(self, **kwargs) -> SchedulingObservation:
         """Reset environment for a new episode.
 
-        Accepts ``task_id`` kwarg (default ``"task1_easy"``).
+        Accepts ``task_id`` kwarg.  Static tasks (``"task1_easy"`` etc.) load
+        from JSON.  Random tasks (``"random_easy"``, ``"random_medium"``,
+        ``"random_hard"``) generate a fresh scenario every call.  An optional
+        ``seed`` kwarg makes random generation reproducible.
         """
         task_id = kwargs.get("task_id", "task1_easy")
-        scenario_path = SCENARIOS_DIR / f"{task_id}.json"
 
-        if not scenario_path.exists():
-            return SchedulingObservation(
-                error_message=f"Unknown task_id: {task_id}",
-                done=True,
-                reward=0.0,
-            )
-
-        with open(scenario_path) as f:
-            self._scenario = json.load(f)
+        # ── random scenario generation ──
+        if task_id.startswith("random_"):
+            difficulty = task_id.split("_", 1)[1]
+            seed = kwargs.get("seed", None)
+            try:
+                self._scenario = generate_scenario(difficulty, seed=seed)
+            except ValueError:
+                return SchedulingObservation(
+                    error_message=f"Unknown difficulty in task_id: {task_id}",
+                    done=True,
+                    reward=0.0,
+                )
+        else:
+            # ── static JSON scenario ──
+            scenario_path = SCENARIOS_DIR / f"{task_id}.json"
+            if not scenario_path.exists():
+                return SchedulingObservation(
+                    error_message=f"Unknown task_id: {task_id}",
+                    done=True,
+                    reward=0.0,
+                )
+            with open(scenario_path) as f:
+                self._scenario = json.load(f)
 
         req = self._scenario["meeting_request"]
         prefs = self._scenario["preferences"]
